@@ -49,14 +49,74 @@ class SoccerPlayEnv(BaseEnv):
         return super()._load_agent(options, sapien.Pose(p=[1, 0, 0]))
     
     def _load_scene(self, options):
+        
+        # Create the Ground
         self.ground = build_ground(self.scene)
         sapien.set_log_level("warn")
         
         from mani_skill.agents.robots.fetch import FETCH_WHEELS_COLLISION_BIT
-        
         self.ground.set_collision_group_bit(
             group=2, bit_idx=FETCH_WHEELS_COLLISION_BIT, bit=1
         )
+        
+        # Create the walls
+        self._build_walls(wall_length=5)
+        
+        # Create a Ball Object
+        print("Creating the ball")
+        builder = self.scene.create_actor_builder()
+        builder.add_sphere_collision(pose=sapien.Pose([0, 0, 0]), radius=0.2)
+        builder.add_sphere_visual(pose=sapien.Pose([0, 0, 0]), radius=0.2)
+        builder.initial_pose = sapien.Pose(p=[0, 0, 0.4])
+        self.ball = builder.build(name="ball")
+        
+    def _build_walls(self, wall_thickness=0.05, wall_height=0.4, wall_length = 2.0):
+
+        builder = self.scene.create_actor_builder()
+        
+        # Add front wall
+        builder.add_box_collision(
+            pose=sapien.Pose([0, wall_length / 2 + wall_thickness / 2, wall_height / 2]),
+            half_size=[wall_length / 2, wall_thickness / 2, wall_height / 2],
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([0, wall_length / 2 + wall_thickness / 2, wall_height / 2]),
+            half_size=[wall_length / 2, wall_thickness / 2, wall_height / 2],
+        )
+
+        # Add back wall
+        builder.add_box_collision(
+            pose=sapien.Pose([0, -wall_length / 2 - wall_thickness / 2, wall_height / 2]),
+            half_size=[wall_length / 2, wall_thickness / 2, wall_height / 2],
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([0, -wall_length / 2 - wall_thickness / 2, wall_height / 2]),
+            half_size=[wall_length / 2, wall_thickness / 2, wall_height / 2],
+        )
+
+        # Add left wall
+        builder.add_box_collision(
+            pose=sapien.Pose([-wall_length / 2 - wall_thickness / 2, 0, wall_height / 2]),
+            half_size=[wall_thickness / 2, wall_length / 2, wall_height / 2],
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([-wall_length / 2 - wall_thickness / 2, 0, wall_height / 2]),
+            half_size=[wall_thickness / 2, wall_length / 2, wall_height / 2],
+        )
+
+        # Add right wall
+        builder.add_box_collision(
+            pose=sapien.Pose([wall_length / 2 + wall_thickness / 2, 0, wall_height / 2]),
+            half_size=[wall_thickness / 2, wall_length / 2, wall_height / 2],
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([wall_length / 2 + wall_thickness / 2, 0, wall_height / 2]),
+            half_size=[wall_thickness / 2, wall_length / 2, wall_height / 2],
+        )
+
+        builder.initial_pose = sapien.Pose()  # Center the walls around the origin
+        self.walls = builder.build_static(name="walls")
+        
     
     @property
     def _default_human_render_camera_configs(self):
@@ -81,7 +141,7 @@ class SoccerPlayEnv(BaseEnv):
                     ]
                 )
                 qpos = qpos.repeat(b).reshape(b, -1)
-                dist = randomization.uniform(1.6, 1.8, size=(b,))
+                dist = randomization.uniform(0.5, 0.6, size=(b,))
                 theta = randomization.uniform(0.9 * torch.pi, 1.1 * torch.pi, size=(b,))
                 xy = torch.zeros((b, 2))
                 xy[:, 0] += torch.cos(theta) * dist
