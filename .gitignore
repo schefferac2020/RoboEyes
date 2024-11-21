@@ -1,0 +1,118 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment directories
+.env/
+.venv/
+venv/
+ENV/
+env/
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# macOS directory attributes
+Icon?
+._*
+
+# macOS file metadata
+.Spotlight-V100
+.Trashes
+.metadata_never_index
+.fseventsd
+
+# Editor backup and swap files
+*.swp
+*.swo
+*.bak
+*.orig
+*.tmp
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Log and debug files
+*.log
+*.out
+*.err
+
+# Coverage reports
+.coverage
+*.cover
+coverage.xml
+htmlcov/
+
+# Test artifacts
+.tox/
+.nox/
+.cache/
+pytest_cache/
+*.cover
+*.py,cover
+.hypothesis/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# C extensions
+*.so
+
+# MyPy type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pyright
+.pyright/
+
+# PyCharm project settings
+.idea/
+
+# VSCode project settings
+.vscode/
+
+# Local `.env` files
+.env
+.env.*
+
+# SQLite database files
+*.db
+*.sqlite3
+
+# Temporary files from running processes
+*.pid
+
+# Application logs
+*.log
+
+# Secrets
+*.key
+*.pem
+
+# Generated documentation
+docs/_build/
+
+videos/*
