@@ -186,19 +186,27 @@ class SoccerPlayEnv(BaseEnv):
     #         success=False
     #     )
         
-    # def _get_obs_extra(self, info):
-    #     return super()._get_obs_extra(info)
+    def _get_obs_extra(self, info): #TODO: right now, it breaks if this is empty for some reason....
+        ball_position = self.ball.pose.p
+        
+        random_obs = torch.zeros_like(ball_position, device=ball_position.device)
+        obs = dict(
+            rand=random_obs
+        )
+        return obs
     
     def compute_dense_reward(self, obs, action, info):
         robot_position = self.agent.robot.get_pose().p
         ball_position = self.ball.pose.p
                 
         distance = torch.norm(ball_position-robot_position, dim=1) # TODO: This is the distance to thing
-                
-        return torch.ones(4, device=action.device)*2 #TODO: Make this better please
+
+        meaningless_reward = torch.ones_like(distance, device=action.device) #TODO: Make this better please
+        return meaningless_reward
         return super().compute_dense_reward(obs, action, info)
     
     def compute_normalized_dense_reward(self, obs, action, info):
+        return self.compute_dense_reward(obs, action, info) / 10 #TODO: This needs to be updated lol
         raise NotImplementedError
         return super().compute_normalized_dense_reward(obs, action, info)
     
