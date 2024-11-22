@@ -23,7 +23,7 @@ from robots.simple_fetch import SimpleFetch
 
 
 
-@register_env("PlaySoccer-v1", max_episode_steps=200)
+@register_env("PlaySoccer-v1", max_episode_steps=100)
 class SoccerPlayEnv(BaseEnv):
     agent: Union[SimpleFetch]
     
@@ -202,13 +202,11 @@ class SoccerPlayEnv(BaseEnv):
         distance = torch.norm(ball_position-robot_position, dim=1) # TODO: This is the distance to thing
 
         meaningless_reward = torch.ones_like(distance, device=action.device) #TODO: Make this better please
-        return meaningless_reward
-        return super().compute_dense_reward(obs, action, info)
+        return 1/distance
     
     def compute_normalized_dense_reward(self, obs, action, info):
-        return self.compute_dense_reward(obs, action, info) / 10 #TODO: This needs to be updated lol
-        raise NotImplementedError
-        return super().compute_normalized_dense_reward(obs, action, info)
+        
+        return self.compute_dense_reward(obs, action, info) / 20 #TODO: This needs to be updated lol
     
     # def compute_sparse_reward(self, obs, action, info):
     #     return super().compute_sparse_reward(obs, action, info)

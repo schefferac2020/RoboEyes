@@ -22,6 +22,8 @@ from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper, Flatten
 from mani_skill.utils.wrappers.record import RecordEpisode
 from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
+import envs.soccer_play
+
 @dataclass
 class Args:
     exp_name: Optional[str] = None
