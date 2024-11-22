@@ -17,18 +17,17 @@ from mani_skill.utils.geometry.geometry import transform_points
 from mani_skill.utils.io_utils import load_json
 from mani_skill.utils.registration import register_env
 from mani_skill.utils.structs import Articulation, Link, Pose
-from mani_skill.utils.structs.types import GPUMemoryConfig, SimConfig
+from mani_skill.utils.structs.types import GPUMemoryConfig, SimConfig, SceneConfig
 
 from robots.simple_fetch import SimpleFetch
 
 
 
-@register_env("PlaySoccer-v1", max_episode_steps=1000)
+@register_env("PlaySoccer-v1", max_episode_steps=200)
 class SoccerPlayEnv(BaseEnv):
     agent: Union[SimpleFetch]
     
     def __init__(self, *args, robot_uids="simp_fetch", robot_init_qpos_noise=0.02, **kwargs):
-        print("Here we are")
         self.robot_init_qpos_noise=robot_init_qpos_noise
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
         
@@ -38,6 +37,9 @@ class SoccerPlayEnv(BaseEnv):
             spacing=100,
             gpu_memory_config=GPUMemoryConfig(
                 max_rigid_contact_count=2**21, max_rigid_patch_count=2**19
+            ),
+            scene_config=SceneConfig(
+                bounce_threshold=0
             )
         )
     
@@ -63,12 +65,13 @@ class SoccerPlayEnv(BaseEnv):
         self._build_walls(wall_length=5)
         
         # Create a Ball Object
-        print("Creating the ball")
         builder = self.scene.create_actor_builder()
         builder.add_sphere_collision(pose=sapien.Pose([0, 0, 0]), radius=0.2)
-        builder.add_sphere_visual(pose=sapien.Pose([0, 0, 0]), radius=0.2)
-        builder.initial_pose = sapien.Pose(p=[0, 0, 0.4])
-        self.ball = builder.build(name="ball")
+        builder.add_sphere_visual(pose=sapien.Pose([0, 0, 0]), radius=0.2, material=[0, 1, 0])
+        builder.initial_pose = sapien.Pose(p=[0, 0, 0.1]) #TODO: Change this plz
+        self.ball = builder.build(name="ball")        
+        self.ball.set_linear_damping(0)
+        
         
     def _build_walls(self, wall_thickness=0.05, wall_height=0.4, wall_length = 2.0):
 
@@ -141,7 +144,7 @@ class SoccerPlayEnv(BaseEnv):
                     ]
                 )
                 qpos = qpos.repeat(b).reshape(b, -1)
-                dist = randomization.uniform(0.5, 0.6, size=(b,))
+                dist = randomization.uniform(1.5, 1.8, size=(b,))
                 theta = randomization.uniform(0.9 * torch.pi, 1.1 * torch.pi, size=(b,))
                 xy = torch.zeros((b, 2))
                 xy[:, 0] += torch.cos(theta) * dist
@@ -154,6 +157,10 @@ class SoccerPlayEnv(BaseEnv):
                 qpos[:, 2] = ori
                 self.agent.robot.set_qpos(qpos)
                 self.agent.robot.set_pose(sapien.Pose())
+                
+                # Initialize the Ball Positions
+                lin_vel = (torch.rand((b, 3))-0.5)*2
+                self.ball.set_linear_velocity(lin_vel)
             
             if self.gpu_sim_enabled:
                 self.scene._gpu_apply_all()
@@ -168,7 +175,7 @@ class SoccerPlayEnv(BaseEnv):
     #         self.scene.px.gpu_apply_rigid_dynamic_data()
     #         self.scene.px.gpu_fetch_rigid_dynamic_data()
             
-    def _after_control_step(self):
+    def _after_control_step(self):     
         return super()._after_control_step()
     
     
@@ -182,8 +189,18 @@ class SoccerPlayEnv(BaseEnv):
     # def _get_obs_extra(self, info):
     #     return super()._get_obs_extra(info)
     
-    # def compute_dense_reward(self, obs, action, info):
-    #     return super().compute_dense_reward(obs, action, info)
+    def compute_dense_reward(self, obs, action, info):
+        robot_position = self.agent.robot.get_pose().p
+        ball_position = self.ball.pose.p
+                
+        distance = torch.norm(ball_position-robot_position, dim=1) # TODO: This is the distance to thing
+                
+        return torch.ones(4, device=action.device)*2 #TODO: Make this better please
+        return super().compute_dense_reward(obs, action, info)
+    
+    def compute_normalized_dense_reward(self, obs, action, info):
+        raise NotImplementedError
+        return super().compute_normalized_dense_reward(obs, action, info)
     
     # def compute_sparse_reward(self, obs, action, info):
     #     return super().compute_sparse_reward(obs, action, info)
