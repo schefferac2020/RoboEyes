@@ -193,9 +193,9 @@ class SoccerPlayEnv(BaseEnv):
                 
         distance = torch.norm(ball_position-robot_position, dim=1)
         
-        ball_position = self.ball.pose.p
+        # ball_position = self.ball.pose.p
         
-        random_obs = torch.zeros_like(ball_position, device=ball_position.device) + 43
+        # random_obs = torch.zeros_like(ball_position, device=ball_position.device) + 43
         obs = dict(
             dist=distance
         )
@@ -212,7 +212,7 @@ class SoccerPlayEnv(BaseEnv):
     
     def compute_normalized_dense_reward(self, obs, action, info):
         
-        return self.compute_dense_reward(obs, action, info) / 20 #TODO: This needs to be updated lol
+        return self.compute_dense_reward(obs, action, info) / 10 #TODO: This needs to be updated lol
     
     # def compute_sparse_reward(self, obs, action, info):
     #     return super().compute_sparse_reward(obs, action, info)

@@ -23,6 +23,7 @@ from mani_skill.utils.wrappers.record import RecordEpisode
 from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
 import envs.soccer_play
+import gc
 
 @dataclass
 class Args:
@@ -70,9 +71,9 @@ class Args:
     """whether to let parallel environments reset upon termination instead of truncation"""
     eval_partial_reset: bool = False
     """whether to let parallel evaluation environments reset upon termination instead of truncation"""
-    num_steps: int = 50
+    num_steps: int = 100
     """the number of steps to run in each environment per policy rollout"""
-    num_eval_steps: int = 50
+    num_eval_steps: int = 100
     """the number of steps to run in each evaluation environment during evaluation"""
     reconfiguration_freq: Optional[int] = None
     """how often to reconfigure the environment during training"""
@@ -176,7 +177,7 @@ class DictArray(object):
         return DictArray(new_buffer_shape, None, data_dict=new_dict)
 
 class NatureCNN(nn.Module):
-    def __init__(self, sample_obs):
+    def __init__(self, sample_obs, just_rgb=False):
         super().__init__()
 
         extractors = {}
@@ -215,7 +216,8 @@ class NatureCNN(nn.Module):
         extractors["rgb"] = nn.Sequential(cnn, fc)
         self.out_features += feature_size
 
-        if "state" in sample_obs:
+        if "state" in sample_obs and not just_rgb:
+            print("The \"state\" key is in sample_obs")
             # for state data we simply pass it through a single linear layer
             state_size = sample_obs["state"].shape[-1]
             extractors["state"] = nn.Linear(state_size, 256)
@@ -276,9 +278,9 @@ class Agent(nn.Module):
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
 
 class DistancePredictor(nn.Module):
-    def __init__(self, envs, sample_obs):
+    def __init__(self, envs, sample_obs, just_rgb=True):
         super().__init__()
-        self.feature_net = NatureCNN(sample_obs=sample_obs)
+        self.feature_net = NatureCNN(sample_obs=sample_obs, just_rgb=just_rgb)
         
         latent_size = self.feature_net.out_features
         
@@ -307,6 +309,14 @@ class Logger:
         self.writer.close()
 
 if __name__ == "__main__":
+    
+    def get_model_size(model):
+        total_params = sum(p.numel() for p in model.parameters())
+        total_buffers = sum(b.numel() for b in model.buffers())
+        total_size_in_bytes = (total_params + total_buffers) * 4  # 4 bytes for float32
+        total_size_in_mb = total_size_in_bytes / (1024 ** 2)
+        return total_size_in_mb
+    
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -323,7 +333,12 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    if args.evaluate:
+        device = torch.device("cuda:1" if torch.cuda.is_available() and args.cuda else "cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    
+    
     
         
     if torch.cuda.is_available():
@@ -336,16 +351,16 @@ if __name__ == "__main__":
     env_kwargs = dict(obs_mode="rgb", render_mode=args.render_mode, sim_backend="gpu")
     if args.control_mode is not None:
         env_kwargs["control_mode"] = args.control_mode
-    # eval_envs = gym.make(args.env_id, num_envs=args.num_eval_envs, reconfiguration_freq=args.eval_reconfiguration_freq, **env_kwargs)
+    eval_envs = gym.make(args.env_id, num_envs=args.num_eval_envs, reconfiguration_freq=args.eval_reconfiguration_freq, **env_kwargs)
     envs = gym.make(args.env_id, num_envs=args.num_envs if not args.evaluate else 1, reconfiguration_freq=args.reconfiguration_freq, **env_kwargs)
 
     # rgbd obs mode returns a dict of data, we flatten it so there is just a rgbd key and state key
     envs = FlattenRGBDObservationWrapper(envs, rgb=True, depth=False, state=args.include_state)
-    # eval_envs = FlattenRGBDObservationWrapper(eval_envs, rgb=True, depth=False, state=args.include_state)
+    eval_envs = FlattenRGBDObservationWrapper(eval_envs, rgb=True, depth=False, state=args.include_state)
 
     if isinstance(envs.action_space, gym.spaces.Dict):
         envs = FlattenActionSpaceWrapper(envs)
-        # eval_envs = FlattenActionSpaceWrapper(eval_envs)
+        eval_envs = FlattenActionSpaceWrapper(eval_envs)
     if args.capture_video:
         eval_output_dir = f"runs/{run_name}/videos"
         if args.evaluate:
@@ -354,9 +369,9 @@ if __name__ == "__main__":
         if args.save_train_video_freq is not None:
             save_video_trigger = lambda x : (x // args.num_steps) % args.save_train_video_freq == 0
             envs = RecordEpisode(envs, output_dir=f"runs/{run_name}/train_videos", save_trajectory=False, save_video_trigger=save_video_trigger, max_steps_per_video=args.num_steps, video_fps=30)
-        # eval_envs = RecordEpisode(eval_envs, output_dir=eval_output_dir, save_trajectory=args.evaluate, trajectory_name="trajectory", max_steps_per_video=args.num_eval_steps, video_fps=30)
+        eval_envs = RecordEpisode(eval_envs, output_dir=eval_output_dir, save_trajectory=args.evaluate, trajectory_name="trajectory", max_steps_per_video=args.num_eval_steps, video_fps=30)
     envs = ManiSkillVectorEnv(envs, args.num_envs, ignore_terminations=not args.partial_reset, record_metrics=True)
-    # eval_envs = ManiSkillVectorEnv(eval_envs, args.num_eval_envs, ignore_terminations=not args.eval_partial_reset, record_metrics=True)
+    eval_envs = ManiSkillVectorEnv(eval_envs, args.num_eval_envs, ignore_terminations=not args.eval_partial_reset, record_metrics=True)
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     max_episode_steps = gym_utils.find_max_episode_steps_value(envs._env)
@@ -367,7 +382,7 @@ if __name__ == "__main__":
             import wandb
             config = vars(args)
             config["env_cfg"] = dict(**env_kwargs, num_envs=args.num_envs, env_id=args.env_id, reward_mode="normalized_dense", env_horizon=max_episode_steps, partial_reset=args.partial_reset)
-            # config["eval_env_cfg"] = dict(**env_kwargs, num_envs=args.num_eval_envs, env_id=args.env_id, reward_mode="normalized_dense", env_horizon=max_episode_steps, partial_reset=args.partial_reset)
+            config["eval_env_cfg"] = dict(**env_kwargs, num_envs=args.num_eval_envs, env_id=args.env_id, reward_mode="normalized_dense", env_horizon=max_episode_steps, partial_reset=args.partial_reset)
             wandb.init(
                 project=args.wandb_project_name,
                 # entity=args.wandb_entity,
@@ -399,7 +414,7 @@ if __name__ == "__main__":
     global_step = 0
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
-    # eval_obs, _ = eval_envs.reset(seed=args.seed)
+    eval_obs, _ = eval_envs.reset(seed=args.seed)
     next_done = torch.zeros(args.num_envs, device=device)
     eps_returns = torch.zeros(args.num_envs, dtype=torch.float, device=device)
     print(f"####")
@@ -410,6 +425,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     
     distance_predictor = DistancePredictor(envs, sample_obs=next_obs).to(device)
+    # exit()
     dist_pred_optimizer = optim.Adam(distance_predictor.parameters(), lr=args.learning_rate, eps=1e-5)
 
     if args.checkpoint:
@@ -417,16 +433,28 @@ if __name__ == "__main__":
 
     for iteration in range(1, args.num_iterations + 1):
         print(f"Epoch: {iteration}, global_step={global_step}")
+        
+        # print("Printing out the potentially used mem:")
+        # for obj in gc.get_objects():
+        #     try:
+        #         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+        #             print(type(obj), obj.size())
+        #     except:
+        #         pass
+        
         final_values = torch.zeros((args.num_steps, args.num_envs), device=device)
         agent.eval()
-        if iteration % args.eval_freq == 1 and False:
+        if iteration % args.eval_freq == 1:
             print("Evaluating")
             eval_obs, _ = eval_envs.reset()
             eval_metrics = defaultdict(list)
             num_episodes = 0
             for _ in range(args.num_eval_steps):
                 with torch.no_grad():
-                    eval_obs, eval_rew, eval_terminations, eval_truncations, eval_infos = eval_envs.step(agent.get_action(eval_obs, deterministic=True))
+                    action = agent.get_action(eval_obs, deterministic=True)
+                    # action[:, 2:] = 0 # DREW: Only alow movement of the eyes
+                    eval_obs, eval_rew, eval_terminations, eval_truncations, eval_infos = eval_envs.step(action)
+                    
                     if "final_info" in eval_infos:
                         mask = eval_infos["_final_info"]
                         num_episodes += mask.sum()
@@ -464,17 +492,15 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             zero_action = torch.zeros_like(action, device=action.device)
-            action[:, 2:] = 0 # DREW: Only alow movement of the eyes
+            # action[:, 2:] = 0 # DREW: Only alow movement of the eyes
             next_obs, reward, terminations, truncations, infos = envs.step(action) # TODO: Drew change this back
             with torch.no_grad():
                 pred_dist = distance_predictor(next_obs).view(-1)
                 gt_dist = next_obs["state"][:, 10] #TODO: if this is part of the state, it should be able to really easily predict it right? 
-                
-                gt_dist = 13.1
-                print("This is the predicted distance: ", pred_dist)
-                
-                predictor_loss = torch.norm(pred_dist - gt_dist) # A low loss is good..., so it should give a higher reward.
+                predictor_loss = torch.abs(pred_dist - gt_dist) # A low loss is good..., so it should give a higher reward.
                 reward = -predictor_loss
+                # reward = -pred_dist # Get close to it...
+                
 
                 del pred_dist, gt_dist
             
@@ -544,31 +570,38 @@ if __name__ == "__main__":
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
                 
-        # # Optimize the prediction network
-        # distance_predictor.train()
-        # b_inds = np.arange(args.batch_size)
-        # clipfracs = []
-        # update_time = time.time()
-        # for epoch in range(args.update_epochs):
-        #     np.random.shuffle(b_inds)
-        #     for start in range(0, args.batch_size, args.minibatch_size):
-        #         end = start + args.minibatch_size
-        #         mb_inds = b_inds[start:end]
-        #         observation_subset = b_obs[mb_inds]
+        # Optimize the prediction network
+        distance_predictor.train()
+        b_inds = np.arange(args.batch_size)
+        clipfracs = []
+        update_time = time.time()
+        for epoch in range(args.update_epochs):
+            np.random.shuffle(b_inds)
+            
+            dist_pred_minibatch_loss = 0
+            for start in range(0, args.batch_size, args.minibatch_size):
+                end = start + args.minibatch_size
+                mb_inds = b_inds[start:end]
+                observation_subset = b_obs[mb_inds]
                 
-        #         # Do The forward distance prediction
-        #         dist_preds = distance_predictor(observation_subset).view(-1)
+                # Do The forward distance prediction
+                dist_preds = distance_predictor(observation_subset).view(-1)
                 
                 
-        #         state_vec = b_obs[mb_inds]["state"]
-        #         ball_dist = state_vec[:, 10] # The last position
+                state_vec = b_obs[mb_inds]["state"]
+                ball_dist = state_vec[:, 10] # The last position
 
+                total_loss = torch.abs(dist_preds - ball_dist).sum()
+                
+                
+                dist_pred_minibatch_loss += total_loss
+                
 
-        #         loss = torch.norm(dist_preds - ball_dist)
-
-        #         dist_pred_optimizer.zero_grad()
-        #         loss.backward()
-        #         dist_pred_optimizer.step()                
+                dist_pred_optimizer.zero_grad()
+                total_loss.backward()
+                dist_pred_optimizer.step()        
+            dist_pred_minibatch_loss /= args.minibatch_size
+            print("total_minibatch_loss: ", dist_pred_minibatch_loss)
         
         
 
@@ -631,24 +664,26 @@ if __name__ == "__main__":
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
         update_time = time.time() - update_time
-        # y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        # var_y = np.var(y_true)
-        # explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+        var_y = np.var(y_true)
+        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        
+        logger.add_scalar("charts/dist_pred_err", dist_pred_minibatch_loss.item(), global_step)
 
-        # logger.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        # logger.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        # logger.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        # logger.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        # logger.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        # logger.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        # logger.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        # logger.add_scalar("losses/explained_variance", explained_var, global_step)
+        logger.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+        logger.add_scalar("losses/value_loss", v_loss.item(), global_step)
+        logger.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+        logger.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        logger.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
+        logger.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+        logger.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+        logger.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
-        # logger.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        # logger.add_scalar("time/step", global_step, global_step)
-        # logger.add_scalar("time/update_time", update_time, global_step)
-        # logger.add_scalar("time/rollout_time", rollout_time, global_step)
-        # logger.add_scalar("time/rollout_fps", args.num_envs * args.num_steps / rollout_time, global_step)
+        logger.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        logger.add_scalar("time/step", global_step, global_step)
+        logger.add_scalar("time/update_time", update_time, global_step)
+        logger.add_scalar("time/rollout_time", rollout_time, global_step)
+        logger.add_scalar("time/rollout_fps", args.num_envs * args.num_steps / rollout_time, global_step)
     if args.save_model and not args.evaluate:
         model_path = f"runs/{run_name}/final_ckpt.pt"
         torch.save(agent.state_dict(), model_path)
