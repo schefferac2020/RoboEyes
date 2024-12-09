@@ -187,11 +187,17 @@ class SoccerPlayEnv(BaseEnv):
     #     )
         
     def _get_obs_extra(self, info): #TODO: right now, it breaks if this is empty for some reason....
+        
+        robot_position = self.agent.robot.get_pose().p
+        ball_position = self.ball.pose.p
+                
+        distance = torch.norm(ball_position-robot_position, dim=1)
+        
         ball_position = self.ball.pose.p
         
-        random_obs = torch.zeros_like(ball_position, device=ball_position.device)
+        random_obs = torch.zeros_like(ball_position, device=ball_position.device) + 43
         obs = dict(
-            rand=random_obs
+            dist=distance
         )
         return obs
     

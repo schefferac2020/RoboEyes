@@ -275,6 +275,26 @@ class Agent(nn.Module):
             action = probs.sample()
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
 
+class DistancePredictor(nn.Module):
+    def __init__(self, envs, sample_obs):
+        super().__init__()
+        self.feature_net = NatureCNN(sample_obs=sample_obs)
+        
+        latent_size = self.feature_net.out_features
+        
+        self.distance_mean = nn.Sequential(
+            layer_init(nn.Linear(latent_size, 512)),
+            nn.ReLU(inplace=True),
+            layer_init(nn.Linear(512, 1), std=0.01*np.sqrt(2)),
+        )
+    
+    def forward(self, x):
+        x = self.feature_net(x)
+        distance_prediction = self.distance_mean(x)
+        
+        return distance_prediction
+
+
 class Logger:
     def __init__(self, log_wandb=False, tensorboard: SummaryWriter = None) -> None:
         self.writer = tensorboard
@@ -304,6 +324,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    
+        
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(torch.cuda.memory_summary(device=None, abbreviated=False))
+    
+    
 
     # env setup
     env_kwargs = dict(obs_mode="rgb", render_mode=args.render_mode, sim_backend="gpu")
@@ -381,6 +408,9 @@ if __name__ == "__main__":
     print(f"####")
     agent = Agent(envs, sample_obs=next_obs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    
+    distance_predictor = DistancePredictor(envs, sample_obs=next_obs).to(device)
+    dist_pred_optimizer = optim.Adam(distance_predictor.parameters(), lr=args.learning_rate, eps=1e-5)
 
     if args.checkpoint:
         agent.load_state_dict(torch.load(args.checkpoint))
@@ -433,7 +463,21 @@ if __name__ == "__main__":
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminations, truncations, infos = envs.step(action)
+            zero_action = torch.zeros_like(action, device=action.device)
+            action[:, 2:] = 0 # DREW: Only alow movement of the eyes
+            next_obs, reward, terminations, truncations, infos = envs.step(action) # TODO: Drew change this back
+            with torch.no_grad():
+                pred_dist = distance_predictor(next_obs).view(-1)
+                gt_dist = next_obs["state"][:, 10] #TODO: if this is part of the state, it should be able to really easily predict it right? 
+                
+                gt_dist = 13.1
+                print("This is the predicted distance: ", pred_dist)
+                
+                predictor_loss = torch.norm(pred_dist - gt_dist) # A low loss is good..., so it should give a higher reward.
+                reward = -predictor_loss
+
+                del pred_dist, gt_dist
+            
             next_done = torch.logical_or(terminations, truncations).to(torch.float32)
             rewards[step] = reward.view(-1) * args.reward_scale
 
@@ -448,6 +492,7 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     final_values[step, torch.arange(args.num_envs, device=device)[done_mask]] = agent.get_value(infos["final_observation"]).view(-1)
         rollout_time = time.time() - rollout_time
+        
         # bootstrap value according to termination and truncation
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
@@ -498,6 +543,34 @@ if __name__ == "__main__":
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
+                
+        # # Optimize the prediction network
+        # distance_predictor.train()
+        # b_inds = np.arange(args.batch_size)
+        # clipfracs = []
+        # update_time = time.time()
+        # for epoch in range(args.update_epochs):
+        #     np.random.shuffle(b_inds)
+        #     for start in range(0, args.batch_size, args.minibatch_size):
+        #         end = start + args.minibatch_size
+        #         mb_inds = b_inds[start:end]
+        #         observation_subset = b_obs[mb_inds]
+                
+        #         # Do The forward distance prediction
+        #         dist_preds = distance_predictor(observation_subset).view(-1)
+                
+                
+        #         state_vec = b_obs[mb_inds]["state"]
+        #         ball_dist = state_vec[:, 10] # The last position
+
+
+        #         loss = torch.norm(dist_preds - ball_dist)
+
+        #         dist_pred_optimizer.zero_grad()
+        #         loss.backward()
+        #         dist_pred_optimizer.step()                
+        
+        
 
         # Optimizing the policy and value network
         agent.train()
@@ -558,24 +631,24 @@ if __name__ == "__main__":
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
         update_time = time.time() - update_time
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        # y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+        # var_y = np.var(y_true)
+        # explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        logger.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        logger.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        logger.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        logger.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        logger.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        logger.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        logger.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        logger.add_scalar("losses/explained_variance", explained_var, global_step)
+        # logger.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+        # logger.add_scalar("losses/value_loss", v_loss.item(), global_step)
+        # logger.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+        # logger.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        # logger.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
+        # logger.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+        # logger.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+        # logger.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
-        logger.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        logger.add_scalar("time/step", global_step, global_step)
-        logger.add_scalar("time/update_time", update_time, global_step)
-        logger.add_scalar("time/rollout_time", rollout_time, global_step)
-        logger.add_scalar("time/rollout_fps", args.num_envs * args.num_steps / rollout_time, global_step)
+        # logger.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        # logger.add_scalar("time/step", global_step, global_step)
+        # logger.add_scalar("time/update_time", update_time, global_step)
+        # logger.add_scalar("time/rollout_time", rollout_time, global_step)
+        # logger.add_scalar("time/rollout_fps", args.num_envs * args.num_steps / rollout_time, global_step)
     if args.save_model and not args.evaluate:
         model_path = f"runs/{run_name}/final_ckpt.pt"
         torch.save(agent.state_dict(), model_path)
