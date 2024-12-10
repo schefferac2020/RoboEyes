@@ -82,7 +82,6 @@ class SimpleFetch(BaseAgent):
 
     @property
     def _controller_configs(self):
-
         # -------------------------------------------------------------------------- #
         # Body
         # -------------------------------------------------------------------------- #
@@ -117,6 +116,19 @@ class SimpleFetch(BaseAgent):
             damping=1000,
             force_limit=500,
         )
+        
+        # stiff_base_pd_joint_pos = PDBaseForwardVelControllerConfig(
+        #     self.base_joint_names,
+        #     lower=0,
+        #     upper=0,
+        #     damping=1000,
+        #     force_limit=500,
+        # )
+        passive_base_ctrl = PassiveControllerConfig(
+            joint_names=self.base_joint_names,
+            damping=1000,
+            force_limit=500
+        ) # Ignores base control (I think)
 
         controller_configs = dict(
             pd_joint_delta_pos=dict(
@@ -127,6 +139,13 @@ class SimpleFetch(BaseAgent):
                 body=body_pd_joint_delta_pos,
                 base=base_pd_joint_vel,
             ),
+            
+            # Drew: Custom Controllers
+            pd_joint_pos_passive_base=dict(
+                body=body_pd_joint_delta_pos,
+                base=passive_base_ctrl, 
+            ),
+            
             # TODO(jigu): how to add boundaries for the following controllers
             pd_joint_target_delta_pos=dict(
                 body=body_pd_joint_delta_pos,

@@ -79,7 +79,7 @@ class Args:
     """how often to reconfigure the environment during training"""
     eval_reconfiguration_freq: Optional[int] = 1
     """for benchmarking purposes we want to reconfigure the eval environment each reset to ensure objects are randomized in some tasks"""
-    control_mode: Optional[str] = "pd_joint_delta_pos_stiff_body" #TODO: Drew you can change this
+    control_mode: Optional[str] = "pd_joint_pos_passive_base" # "pd_joint_delta_pos_stiff_body" #TODO: Drew you can change this
     """the control mode to use for the environment"""
     anneal_lr: bool = False
     """Toggle learning rate annealing for policy and value networks"""
@@ -120,6 +120,7 @@ class Args:
     """the mini-batch size (computed in runtime)"""
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
+    
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -351,6 +352,8 @@ if __name__ == "__main__":
     env_kwargs = dict(obs_mode="rgb", render_mode=args.render_mode, sim_backend="gpu")
     if args.control_mode is not None:
         env_kwargs["control_mode"] = args.control_mode
+        
+    print("These are the env_kwargs", env_kwargs)
     eval_envs = gym.make(args.env_id, num_envs=args.num_eval_envs, reconfiguration_freq=args.eval_reconfiguration_freq, **env_kwargs)
     envs = gym.make(args.env_id, num_envs=args.num_envs if not args.evaluate else 1, reconfiguration_freq=args.reconfiguration_freq, **env_kwargs)
 
@@ -452,7 +455,7 @@ if __name__ == "__main__":
             for _ in range(args.num_eval_steps):
                 with torch.no_grad():
                     action = agent.get_action(eval_obs, deterministic=True)
-                    # action[:, 2:] = 0 # DREW: Only alow movement of the eyes
+                    action[:, 2:] = 0 # DREW: Only alow movement of the eyes
                     eval_obs, eval_rew, eval_terminations, eval_truncations, eval_infos = eval_envs.step(action)
                     
                     if "final_info" in eval_infos:
@@ -492,7 +495,7 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             zero_action = torch.zeros_like(action, device=action.device)
-            # action[:, 2:] = 0 # DREW: Only alow movement of the eyes
+            action[:, 2:] = 0 # DREW: Only alow movement of the eyes
             next_obs, reward, terminations, truncations, infos = envs.step(action) # TODO: Drew change this back
             with torch.no_grad():
                 pred_dist = distance_predictor(next_obs).view(-1)

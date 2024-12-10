@@ -159,7 +159,8 @@ class SoccerPlayEnv(BaseEnv):
                 self.agent.robot.set_pose(sapien.Pose())
                 
                 # Initialize the Ball Positions
-                lin_vel = (torch.rand((b, 3))-0.5)*2
+                max_vel = 2
+                lin_vel = (torch.rand((b, 3))-0.5)*2*max_vel
                 self.ball.set_linear_velocity(lin_vel)
             
             if self.gpu_sim_enabled:
