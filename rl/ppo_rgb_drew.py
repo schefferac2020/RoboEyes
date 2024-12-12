@@ -428,7 +428,6 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     
     distance_predictor = DistancePredictor(envs, sample_obs=next_obs).to(device)
-    # exit()
     dist_pred_optimizer = optim.Adam(distance_predictor.parameters(), lr=args.learning_rate, eps=1e-5)
 
     if args.checkpoint:
@@ -500,7 +499,9 @@ if __name__ == "__main__":
             with torch.no_grad():
                 pred_dist = distance_predictor(next_obs).view(-1)
                 gt_dist = next_obs["state"][:, 10] #TODO: if this is part of the state, it should be able to really easily predict it right? 
-                predictor_loss = torch.abs(pred_dist - gt_dist) # A low loss is good..., so it should give a higher reward.
+                gt_force = next_obs["state"][:, 11] #TODO: if this is part of the state, it should be able to really easily predict it right? 
+                
+                predictor_loss = torch.abs(pred_dist - gt_force) # A low loss is good..., so it should give a higher reward.
                 reward = -predictor_loss
                 # reward = -pred_dist # Get close to it...
                 
@@ -590,11 +591,11 @@ if __name__ == "__main__":
                 # Do The forward distance prediction
                 dist_preds = distance_predictor(observation_subset).view(-1)
                 
-                
                 state_vec = b_obs[mb_inds]["state"]
                 ball_dist = state_vec[:, 10] # The last position
+                force = state_vec[:, 11] # The last position
 
-                total_loss = torch.abs(dist_preds - ball_dist).sum()
+                total_loss = torch.abs(dist_preds - force).sum()
                 
                 
                 dist_pred_minibatch_loss += total_loss

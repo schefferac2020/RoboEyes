@@ -22,7 +22,6 @@ from mani_skill.utils.structs.types import GPUMemoryConfig, SimConfig, SceneConf
 from robots.simple_fetch import SimpleFetch
 
 
-
 @register_env("PlaySoccer-v1", max_episode_steps=100)
 class SoccerPlayEnv(BaseEnv):
     agent: Union[SimpleFetch]
@@ -61,18 +60,46 @@ class SoccerPlayEnv(BaseEnv):
             group=2, bit_idx=FETCH_WHEELS_COLLISION_BIT, bit=1
         )
         
+        
+        
         # Create the walls
-        self._build_walls(wall_length=5)
+        self._build_walls(wall_length=10)
         
         # Create a Ball Object
+        self._build_balls(1)
+        print("Made the balls")
+        
+        # Get force contact links
+        self.active_links = [
+            link for link in self.agent.robot.get_links() if "dummy" not in link.name
+        ]
+        
+        # print("Note: These are the active links -->", [link.name for link in self.active_links])
+        
+        self.force_sensor_links = [
+            link.name for link in self.active_links if "force" in link.name
+        ]
+        # print("Note: These are the force sensor links -->", self.force_sensor_links)
+        
+     
+    def _build_balls(self, num_balls):
         builder = self.scene.create_actor_builder()
-        builder.add_sphere_collision(pose=sapien.Pose([0, 0, 0]), radius=0.2)
-        builder.add_sphere_visual(pose=sapien.Pose([0, 0, 0]), radius=0.2, material=[0, 1, 0])
-        builder.initial_pose = sapien.Pose(p=[0, 0, 0.1]) #TODO: Change this plz
-        self.ball = builder.build(name="ball")        
-        self.ball.set_linear_damping(0)
         
-        
+        self.balls = []
+        for ball_num in range(num_balls):
+            radius = randomization.uniform(0.1, 0.3, (1,))
+            ball_color = randomization.uniform(0, 1, (3,))
+                    
+            #TODO: Make this randomized        
+            
+            builder.add_sphere_collision(pose=sapien.Pose([0, 0, 0]), radius=radius)
+            builder.add_sphere_visual(pose=sapien.Pose([0, 0, 0]), radius=radius, material=ball_color)
+            builder.initial_pose = sapien.Pose(p=[0, 0, 0]) #TODO: Change this plz
+            ball = builder.build(name=f"ball{ball_num}")        
+            ball.set_linear_damping(0)
+            
+            self.balls.append(ball)
+      
     def _build_walls(self, wall_thickness=0.05, wall_height=0.4, wall_length = 2.0):
 
         builder = self.scene.create_actor_builder()
@@ -119,11 +146,22 @@ class SoccerPlayEnv(BaseEnv):
 
         builder.initial_pose = sapien.Pose()  # Center the walls around the origin
         self.walls = builder.build_static(name="walls")
+    
+    @property
+    def contact_forces(self):
+        """Returns log1p of force on contact-sensor links"""
+        force_vecs = torch.stack(
+            [self.agent.robot.get_net_contact_forces([link]) for link in self.force_sensor_links],
+            dim=1
+        )
+        
+        force_mags = torch.linalg.norm(force_vecs, dim=-1).view(-1, len(self.force_sensor_links)) # (b, len(contact_sensors))
+        return torch.log1p(force_mags)
         
     
     @property
     def _default_human_render_camera_configs(self):
-        pose = sapien_utils.look_at(eye=[-1.8, -1.3, 1.8], target=[0, 0, 0])
+        pose = sapien_utils.look_at(eye=[0, -4, 5], target=[0, 0, 0])
         return CameraConfig(
             "render_camera", pose=pose, width=512, height=512, fov=1, near=0.01, far=100
         )
@@ -144,24 +182,51 @@ class SoccerPlayEnv(BaseEnv):
                     ]
                 )
                 qpos = qpos.repeat(b).reshape(b, -1)
-                dist = randomization.uniform(1.5, 1.8, size=(b,))
+                dist = randomization.uniform(2.0, 2.5, size=(b,))
                 theta = randomization.uniform(0.9 * torch.pi, 1.1 * torch.pi, size=(b,))
                 xy = torch.zeros((b, 2))
                 xy[:, 0] += torch.cos(theta) * dist
                 xy[:, 1] += torch.sin(theta) * dist
                 qpos[:, :2] = xy # TODO, Idk if this is right? 
-                noise_ori = randomization.uniform(
-                    -0.05 * torch.pi, 0.05 * torch.pi, size=(b,)
-                )
+                noise_ori = randomization.uniform(-0.05 * torch.pi, 0.05 * torch.pi, size=(b,))
                 ori = (theta - torch.pi) + noise_ori
                 qpos[:, 2] = ori
                 self.agent.robot.set_qpos(qpos)
                 self.agent.robot.set_pose(sapien.Pose())
                 
-                # Initialize the Ball Positions
-                max_vel = 2
-                lin_vel = (torch.rand((b, 3))-0.5)*2*max_vel
-                self.ball.set_linear_velocity(lin_vel)
+                # Initialize the Ball velocities
+                direct_at_agent = True
+                for ball in self.balls:
+                    # Randomize the Ball Positions
+                    poses = randomization.uniform(-1,1, (4, 7))
+                    poses[:, 0] = torch.abs(poses[:, 0])
+                    poses[:, 2] = 0.1
+                    ball.pose = poses
+                    
+                    
+                    # Randomize the ball velocity
+                    min_vel = 0.3
+                    max_vel = 2
+                    ball_vels = randomization.uniform(min_vel, max_vel, (b, 1))
+
+                    ball_xys = poses[:,0:2]
+                    
+                    if direct_at_agent:
+                        noise_amt = 0.1
+                        noise = randomization.uniform(noise_amt, noise_amt, (b, 2))
+                        vec_to_agent = (xy - ball_xys) + noise
+                        unit_vec_to_agent = vec_to_agent / (torch.linalg.norm(vec_to_agent, dim=1, keepdim=True) + 1e-8)
+                    
+                        unit_vec_to_agent3 = torch.zeros((b, 3))
+                        unit_vec_to_agent3[:, :2] = unit_vec_to_agent
+                        lin_vel = (unit_vec_to_agent3)*ball_vels
+                        
+                        direct_at_agent = False
+                    else:
+                        lin_vel = randomization.uniform(-max_vel, max_vel, (b, 3))
+                        lin_vel[:, 2] = 0
+                        
+                    ball.set_linear_velocity(lin_vel)
             
             if self.gpu_sim_enabled:
                 self.scene._gpu_apply_all()
@@ -190,26 +255,27 @@ class SoccerPlayEnv(BaseEnv):
     def _get_obs_extra(self, info): #TODO: right now, it breaks if this is empty for some reason....
         
         robot_position = self.agent.robot.get_pose().p
-        ball_position = self.ball.pose.p
+        # ball_position = self.ball.pose.p
                 
-        distance = torch.norm(ball_position-robot_position, dim=1)
+        distance = torch.norm(robot_position-robot_position, dim=1)
         
         # ball_position = self.ball.pose.p
         
         # random_obs = torch.zeros_like(ball_position, device=ball_position.device) + 43
         obs = dict(
-            dist=distance
+            dist=torch.zeros_like(distance),
+            contact_forces=self.contact_forces
         )
         return obs
     
     def compute_dense_reward(self, obs, action, info):
         robot_position = self.agent.robot.get_pose().p
-        ball_position = self.ball.pose.p
+        # ball_position = self.ball.pose.p
                 
-        distance = torch.norm(ball_position-robot_position, dim=1) # TODO: This is the distance to thing
+        distance = torch.norm(robot_position-robot_position, dim=1) # TODO: This is the distance to thing
 
         meaningless_reward = torch.ones_like(distance, device=action.device) #TODO: Make this better please
-        return 1/distance
+        return meaningless_reward
     
     def compute_normalized_dense_reward(self, obs, action, info):
         
