@@ -67,7 +67,6 @@ class SoccerPlayEnv(BaseEnv):
         
         # Create a Ball Object
         self._build_balls(1)
-        print("Made the balls")
         
         # Get force contact links
         self.active_links = [
@@ -82,7 +81,7 @@ class SoccerPlayEnv(BaseEnv):
         # print("Note: These are the force sensor links -->", self.force_sensor_links)
         
      
-    def _build_balls(self, num_balls):
+    def _build_balls(self, num_balls=1):
         builder = self.scene.create_actor_builder()
         
         self.balls = []
@@ -172,35 +171,31 @@ class SoccerPlayEnv(BaseEnv):
 
 
             if self.robot_uids == "simp_fetch":
-                qpos = torch.tensor(
-                    [
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                    ]
-                )
-                qpos = qpos.repeat(b).reshape(b, -1)
+                qpos = torch.zeros(b, 5)
                 dist = randomization.uniform(2.0, 2.5, size=(b,))
                 theta = randomization.uniform(0.9 * torch.pi, 1.1 * torch.pi, size=(b,))
                 xy = torch.zeros((b, 2))
                 xy[:, 0] += torch.cos(theta) * dist
                 xy[:, 1] += torch.sin(theta) * dist
-                qpos[:, :2] = xy # TODO, Idk if this is right? 
-                noise_ori = randomization.uniform(-0.05 * torch.pi, 0.05 * torch.pi, size=(b,))
-                ori = (theta - torch.pi) + noise_ori
+                qpos[:, :2] = xy
+                ori = (theta - torch.pi) + randomization.uniform(-0.05 * torch.pi, 0.05 * torch.pi, size=(b,))
                 qpos[:, 2] = ori
+                qpos[:, 3] = randomization.uniform(-1.0, 1.0, (b,)) # randomize camera pan
+                qpos[:, 4] = randomization.uniform(-0.7, 1.2, (b,)) # randomize camera tilt
+                
+                
                 self.agent.robot.set_qpos(qpos)
                 self.agent.robot.set_pose(sapien.Pose())
                 
-                # Initialize the Ball velocities
+                # Initialize the Balls
                 direct_at_agent = True
                 for ball in self.balls:
                     # Randomize the Ball Positions
-                    poses = randomization.uniform(-1,1, (4, 7))
+                    poses = randomization.uniform(-3,3, (b, 7))
                     poses[:, 0] = torch.abs(poses[:, 0])
                     poses[:, 2] = 0.1
+                    poses[:, 4:] = 0
+                    poses[:, 3] = 1
                     ball.pose = poses
                     
                     
@@ -209,7 +204,7 @@ class SoccerPlayEnv(BaseEnv):
                     max_vel = 2
                     ball_vels = randomization.uniform(min_vel, max_vel, (b, 1))
 
-                    ball_xys = poses[:,0:2]
+                    ball_xys = ball.pose.raw_pose[:,0:2]
                     
                     if direct_at_agent:
                         noise_amt = 0.1
