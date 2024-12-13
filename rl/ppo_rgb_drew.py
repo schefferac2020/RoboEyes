@@ -24,6 +24,7 @@ from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
 import envs.soccer_play
 import gc
+import matplotlib.pyplot as plt
 
 @dataclass
 class Args:
@@ -334,10 +335,10 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    if args.evaluate:
-        device = torch.device("cuda:1" if torch.cuda.is_available() and args.cuda else "cpu")
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    # if args.evaluate:
+    #     device = torch.device("cuda:1" if torch.cuda.is_available() and args.cuda else "cpu")
+    # else:
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     
     
     
@@ -431,7 +432,10 @@ if __name__ == "__main__":
     dist_pred_optimizer = optim.Adam(distance_predictor.parameters(), lr=args.learning_rate, eps=1e-5)
 
     if args.checkpoint:
+        predictor_checkpoint = args.checkpoint.replace("ckpt", "predictor_ckpt")
+
         agent.load_state_dict(torch.load(args.checkpoint))
+        distance_predictor.load_state_dict(torch.load(predictor_checkpoint))
 
     for iteration in range(1, args.num_iterations + 1):
         print(f"Epoch: {iteration}, global_step={global_step}")
@@ -448,6 +452,11 @@ if __name__ == "__main__":
         agent.eval()
         if iteration % args.eval_freq == 1:
             print("Evaluating")
+            
+            
+            pred_forces = []
+            gt_forces = []
+            
             eval_obs, _ = eval_envs.reset()
             eval_metrics = defaultdict(list)
             num_episodes = 0
@@ -456,6 +465,12 @@ if __name__ == "__main__":
                     action = agent.get_action(eval_obs, deterministic=True)
                     action[:, 2:] = 0 # DREW: Only alow movement of the eyes
                     eval_obs, eval_rew, eval_terminations, eval_truncations, eval_infos = eval_envs.step(action)
+                    
+                    # Capture the predicted and calculated forces
+                    # print("This is a ground truth force:", eval_obs["state"][0][-1])
+                    # print("This is a predicted force:", distance_predictor(eval_obs).view(-1))
+                    gt_forces.append(eval_obs["state"][0][-1].item())
+                    pred_forces.append(distance_predictor(eval_obs).view(-1).item())
                     
                     if "final_info" in eval_infos:
                         mask = eval_infos["_final_info"]
@@ -472,8 +487,12 @@ if __name__ == "__main__":
                 break
         if args.save_model and iteration % args.eval_freq == 1:
             model_path = f"runs/{run_name}/ckpt_{iteration}.pt"
+            predictor_path = f"runs/{run_name}/predictor_ckpt_{iteration}.pt"
+            
             torch.save(agent.state_dict(), model_path)
+            torch.save(distance_predictor.state_dict(), predictor_path)
             print(f"model saved to {model_path}")
+            print(f"model saved to {predictor_path}")
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -498,16 +517,14 @@ if __name__ == "__main__":
             next_obs, reward, terminations, truncations, infos = envs.step(action) # TODO: Drew change this back
             with torch.no_grad():
                 pred_dist = distance_predictor(next_obs).view(-1)
-                gt_dist = next_obs["state"][:, 10] #TODO: if this is part of the state, it should be able to really easily predict it right? 
+                # print("DREW This is the predicted distance", pred_dist)
+                # gt_dist = next_obs["state"][:, 10] #TODO: if this is part of the state, it should be able to really easily predict it right? 
                 gt_force = next_obs["state"][:, 11] #TODO: if this is part of the state, it should be able to really easily predict it right? 
-                
+                # gt_dist = 10
                 predictor_loss = torch.abs(pred_dist - gt_force) # A low loss is good..., so it should give a higher reward.
                 reward = -predictor_loss
                 # reward = -pred_dist # Get close to it...
-                
-
-                del pred_dist, gt_dist
-            
+                            
             next_done = torch.logical_or(terminations, truncations).to(torch.float32)
             rewards[step] = reward.view(-1) * args.reward_scale
 
@@ -592,10 +609,15 @@ if __name__ == "__main__":
                 dist_preds = distance_predictor(observation_subset).view(-1)
                 
                 state_vec = b_obs[mb_inds]["state"]
-                ball_dist = state_vec[:, 10] # The last position
-                force = state_vec[:, 11] # The last position
-
-                total_loss = torch.abs(dist_preds - force).sum()
+                # ball_dist = state_vec[:, 10] # The last position
+                gt_force = state_vec[:, 11] # The last position
+                # ball_dist = 10
+                # print("dist_preds", dist_preds.shape)
+                # print("gt_force", gt_force.shape)
+                # print("Difference!", torch.abs(dist_preds - gt_force).shape)
+                # exit()
+                
+                total_loss = torch.abs(dist_preds - gt_force).sum()
                 
                 
                 dist_pred_minibatch_loss += total_loss
@@ -693,5 +715,18 @@ if __name__ == "__main__":
         torch.save(agent.state_dict(), model_path)
         print(f"model saved to {model_path}")
 
+    if args.evaluate:
+        print(pred_forces)
+        print(gt_forces)
+        plt.plot(range(100), pred_forces[100:200], label="pred force")
+        plt.plot(range(100), gt_forces[100:200], label="GT force")
+        plt.legend()
+        plt.xlabel("timestep (t)")
+        plt.ylabel("force (N)")
+        plt.title("Contact Sensor")
+        
+        plt.savefig("force_pred_3.png")
+        print("Saved figure force_pred.png")
+    
     envs.close()
     if logger is not None: logger.close()
